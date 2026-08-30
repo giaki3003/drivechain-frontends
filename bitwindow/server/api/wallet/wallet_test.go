@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"testing"
+	"time"
 
 	orchpb "github.com/LayerTwo-Labs/sidesail/sidechain-orchestrator/gen/walletmanager/v1"
 
@@ -407,6 +408,44 @@ func TestService_UnlockWallet(t *testing.T) {
 		}))
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "not encrypted")
+	})
+}
+
+func TestService_CreateBackup(t *testing.T) {
+	t.Parallel()
+
+	// The unencrypted fixture wallet auto-unlocks in a startup goroutine.
+	waitUnlocked := func(t *testing.T, cli walletv1connect.WalletServiceClient) {
+		require.Eventually(t, func() bool {
+			_, err := cli.IsWalletUnlocked(context.Background(), connect.NewRequest(&emptypb.Empty{}))
+			return err == nil
+		}, 5*time.Second, 10*time.Millisecond)
+	}
+
+	t.Run("unlocked wallet backs up", func(t *testing.T) {
+		t.Parallel()
+
+		cli := walletv1connect.NewWalletServiceClient(apitests.API(t, database.Test(t)))
+		waitUnlocked(t, cli)
+
+		resp, err := cli.CreateBackup(context.Background(), connect.NewRequest(&emptypb.Empty{}))
+		require.NoError(t, err)
+		require.NotEmpty(t, resp.Msg.BackupData)
+	})
+
+	t.Run("locked wallet cannot back up", func(t *testing.T) {
+		t.Parallel()
+
+		cli := walletv1connect.NewWalletServiceClient(apitests.API(t, database.Test(t)))
+		waitUnlocked(t, cli)
+
+		_, err := cli.LockWallet(context.Background(), connect.NewRequest(&emptypb.Empty{}))
+		require.NoError(t, err)
+
+		resp, err := cli.CreateBackup(context.Background(), connect.NewRequest(&emptypb.Empty{}))
+		require.Error(t, err)
+		require.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+		require.Nil(t, resp)
 	})
 }
 
